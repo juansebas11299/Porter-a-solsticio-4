@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Portería - Control Residencial</title>
+<style>
+*{box-sizing:border-box}body{font-family:system-ui,-apple-system,Segoe UI,Arial,sans-serif;margin:0;background:#eef2f6;color:#172033;padding-bottom:76px}
+header{background:#173b57;color:#fff;padding:16px;position:sticky;top:0;z-index:5;box-shadow:0 2px 8px #0002}
+header h1{font-size:20px;margin:0 0 3px}header div{font-size:12px;opacity:.85}
+main{max-width:760px;margin:auto;padding:14px}
+nav{position:fixed;bottom:0;left:0;right:0;z-index:10;background:#fff;border-top:1px solid #d9dee5;display:grid;grid-template-columns:repeat(4,1fr);padding:6px;gap:5px}
+nav button{padding:10px 4px;font-size:11px;border-radius:9px}
+button,.btn{border:0;border-radius:9px;padding:12px 14px;cursor:pointer;background:#173b57;color:#fff;font-weight:600;min-height:44px}
+button.secondary{background:#e5e7eb;color:#172033}.green{background:#16834b!important}
+.card{background:#fff;border-radius:14px;padding:14px;margin-bottom:12px;box-shadow:0 2px 8px #0000000d}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.grid .card{margin:0;padding:12px}.grid button{width:100%;font-size:12px;padding:9px}
+input,select,textarea{width:100%;padding:12px;margin:5px 0 12px;border:1px solid #cbd3dc;border-radius:9px;background:#fff;font-size:16px}
+label{font-size:12px;font-weight:700;color:#435066}.hidden{display:none}.muted{color:#687386;font-size:13px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+table{width:100%;border-collapse:collapse;background:#fff;font-size:13px}th,td{padding:10px 7px;border-bottom:1px solid #edf0f3;text-align:left}
+.tablewrap{overflow-x:auto;border-radius:12px}.badge{padding:5px 8px;border-radius:20px;background:#fff3cd;font-size:11px;white-space:nowrap}.delivered{background:#d8f3e4}
+.actions{display:flex;gap:6px;flex-wrap:wrap}.actions button{flex:1}
+.search{font-size:17px;margin-bottom:10px}
+.stat{font-size:24px;font-weight:800}.quick{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:520px){.grid{grid-template-columns:repeat(2,1fr)}.row{grid-template-columns:1fr}.tablewrap table{min-width:560px}}
+</style>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f172a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Portería Solcicio 4">
+<link rel="apple-touch-icon" href="icon-192.png">
+</head>
+<body>
+<header><h1>Portería Solcicio 4</h1><div>Control de residentes y correspondencia</div></header>
+<main>
+<nav>
+<button onclick="show('home')">🏠 Inicio</button><button onclick="show('residents')">👥 Residentes</button>
+<button onclick="show('mail')">📦 Paquetes</button><button onclick="show('history')">🕘 Historial</button>
+</nav>
+
+<section id="home">
+<h2>Control de portería</h2>
+<p class="muted">9 torres · 12 pisos · 4 apartamentos por piso.</p>
+<div class="card">
+<label>Buscar apartamento</label>
+<input class="search" id="quickSearch" placeholder="Ej. Torre 3, apartamento 704" oninput="quickFind()">
+<div id="quickResult" class="muted">Escribe una torre y apartamento para consultar rápidamente.</div>
+</div>
+<div class="quick">
+<div class="card"><div class="stat" id="residentCount">0</div><div class="muted">Residentes</div></div>
+<div class="card"><div class="stat" id="pendingCount">0</div><div class="muted">Paquetes pendientes</div></div>
+</div>
+<div id="towerGrid" class="grid"></div>
+</section>
+
+<section id="residents" class="hidden">
+<h2>Registrar residente</h2>
+<div class="card">
+<div class="row"><div><label>Torre</label><select id="rt"></select></div><div><label>Apartamento</label><select id="ra"></select></div></div>
+<label>Nombre completo</label><input id="rn" placeholder="Ej. Juan Pérez">
+<label>Celular / WhatsApp</label><input id="rp" placeholder="Ej. 3001234567">
+<label>Observaciones</label><textarea id="ro" placeholder="Opcional"></textarea>
+<button onclick="saveResident()">Guardar residente</button><p class="muted" style="margin:10px 0 0">Puedes editar o eliminar residentes desde la lista de abajo.</p>
+</div>
+<h2>Residentes registrados</h2><p class="muted">Esta versión usa su propia base de datos para no mezclarse con las versiones anteriores abiertas en el navegador.</p><div id="residentList"></div>
+</section>
+
+<section id="mail" class="hidden">
+<h2>Registrar correspondencia</h2>
+<div class="card">
+<div class="row"><div><label>Torre</label><select id="mt" onchange="refreshMailApts()"></select></div><div><label>Apartamento</label><select id="ma" onchange="showMailResident()"></select></div></div><div id="mailResident" class="card muted">Selecciona torre y apartamento para identificar al residente.</div>
+<label>Tipo</label><select id="mk"><option>Paquete</option><option>Sobre</option><option>Documento</option><option>Otro</option></select>
+<label>Observación</label><input id="mo" placeholder="Ej. paquete de mensajería">
+<label>Foto del paquete</label>
+<div class="card" style="padding:10px;margin:5px 0 12px">
+  <input id="packagePhoto" type="file" accept="image/*" capture="environment" onchange="previewPackagePhoto()">
+  <div id="photoPreview" class="muted">Puedes tomar una foto directamente con la cámara del celular o seleccionar una imagen.</div>
+</div>
+<button onclick="saveMail()">Registrar llegada</button>
+</div>
+<h2>Correspondencia pendiente</h2><div id="pending"></div>
+</section>
+
+<section id="history" class="hidden">
+<h2>Historial de correspondencia</h2><div id="historyList"></div>
+</section>
+</main>
+<script>
+const towers=[1,2,3,4,5,6,7,8,9];
+const keyR='portería_residentes_v6', keyM='portería_correspondencia_v6';
+let residents=JSON.parse(localStorage.getItem(keyR)||'[]');
+let mails=JSON.parse(localStorage.getItem(keyM)||'[]');
+if(!residents.length){
+ ['portería_residentes_v3','portería_residentes_v2','portería_residentes_v1'].some(k=>{
+   try{let oldData=JSON.parse(localStorage.getItem(k)||'[]');if(oldData.length){residents=oldData;localStorage.setItem(keyR,JSON.stringify(residents));return true}}catch(e){}
+   return false;
+ });
+}
+const apt=(floor,n)=>String(floor*100+n);
+function aptOptions(sel){sel.innerHTML='';for(let f=1;f<=12;f++)for(let n=1;n<=4;n++){let o=document.createElement('option');o.value=apt(f,n);o.textContent=apt(f,n);sel.appendChild(o)}}
+function towerOptions(sel){sel.innerHTML='';towers.forEach(t=>{let o=document.createElement('option');o.value=t;o.textContent='Torre '+t;sel.appendChild(o)})}
+function setup(){towerOptions(rt);towerOptions(mt);aptOptions(ra);aptOptions(ma);renderTowers();renderResidents();renderPending();renderHistory();showMailResident()}
+function quickFind(){
+ let q=(quickSearch.value||'').toLowerCase().trim();
+ if(!q){quickResult.textContent='Escribe una torre y apartamento para consultar rápidamente.';return}
+ let mt=q.match(/torre\s*(\d+)/), ma=q.match(/(\d{3,4})/);
+ if(!mt||!ma){quickResult.textContent='Ejemplo: Torre 3, apartamento 704';return}
+ let t=+mt[1], a=ma[1], rs=residents.filter(r=>r.tower===t&&r.apt===a), ms=mails.filter(m=>m.tower===t&&m.apt===a&&m.status==='Pendiente');
+ quickResult.innerHTML=`<b>Torre ${t} · Apartamento ${a}</b><br>${rs.length?rs.map(r=>r.name+' · '+r.phone).join('<br>'):'Sin residente registrado'}<br><span class="muted">${ms.length} correspondencia pendiente</span>`;
+}
+function updateStats(){residentCount.textContent=residents.length;pendingCount.textContent=mails.filter(m=>m.status==='Pendiente').length}
+function renderTowers(){towerGrid.innerHTML=towers.map(t=>`<div class="card"><b>Torre ${t}</b><p>12 pisos · 48 apartamentos</p><button onclick="openTower(${t})">Ver apartamentos</button></div>`).join('')}
+function openTower(t){show('residents');rt.value=t;renderResidents()}
+function refreshMailApts(){aptOptions(ma);showMailResident();}
+function saveResident(){let r={id:Date.now(),tower:+rt.value,apt:ra.value,name:rn.value.trim(),phone:rp.value.replace(/\D/g,''),obs:ro.value.trim()};if(!r.name||!r.phone){alert('Escribe nombre y celular.');return}residents.push(r);localStorage.setItem(keyR,JSON.stringify(residents));rn.value=rp.value=ro.value='';renderResidents();alert('Residente guardado.')}
+function renderResidents(){
+ updateStats();
+ residentList.innerHTML=residents.length?
+ '<div class="tablewrap"><table><tr><th>Torre</th><th>Apto</th><th>Residente</th><th>WhatsApp</th><th>Acciones</th></tr>'+
+ residents.map(r=>`<tr><td>${r.tower}</td><td>${r.apt}</td><td>${r.name}</td><td>${r.phone}</td><td><div class="actions"><button onclick="editResident(${r.id})">Editar</button><button class="secondary" onclick="deleteResident(${r.id})">Eliminar</button></div></td></tr>`).join('')+
+ '</table></div>':'<div class="card muted">Aún no hay residentes registrados.</div>';
+}
+function findResident(m){
+ let t=Number(m.tower);
+ let a=String(m.apt);
+ return residents.find(r=>Number(r.tower)===t && String(r.apt)===a) || null;
+}
+function showMailResident(){
+ let r=findResident({tower:mt.value,apt:ma.value});
+ if(r){
+   mailResident.innerHTML=`<b>Residente:</b> ${r.name}<br><span class="muted">WhatsApp: ${r.phone}</span>`;
+   mailResident.style.border='1px solid #d8f3e4';
+ }else{
+   mailResident.innerHTML='⚠️ No hay residente registrado para este apartamento. Puedes registrar el paquete de todas formas.';
+   mailResident.style.border='1px solid #f0c36d';
+ }
+}
+function previewPackagePhoto(){
+ let input=document.getElementById('packagePhoto');
+ let box=document.getElementById('photoPreview');
+ if(!input.files || !input.files[0]){box.textContent='Puedes tomar una foto directamente con la cámara del celular o seleccionar una imagen.';return}
+ let file=input.files[0];
+ let reader=new FileReader();
+ reader.onload=function(e){
+   box.innerHTML=`<img src="${e.target.result}" alt="Foto del paquete" style="max-width:100%;max-height:220px;border-radius:10px;margin-top:6px">`;
+ };
+ reader.readAsDataURL(file);
+}
+function getPhotoData(){
+ let input=document.getElementById('packagePhoto');
+ return new Promise(resolve=>{
+   if(!input.files || !input.files[0]) return resolve('');
+   let reader=new FileReader();
+   reader.onload=e=>{
+     let img=new Image();
+     img.onload=()=>{
+       let max=1000, scale=Math.min(1,max/img.width,max/img.height);
+       let c=document.createElement('canvas');
+       c.width=Math.round(img.width*scale); c.height=Math.round(img.height*scale);
+       let ctx=c.getContext('2d'); ctx.drawImage(img,0,0,c.width,c.height);
+       resolve(c.toDataURL('image/jpeg',0.72));
+     };
+     img.src=e.target.result;
+   };
+   reader.readAsDataURL(input.files[0]);
+ });
+}
+async function saveMail(){
+ let r=findResident({tower:mt.value,apt:ma.value});
+ let photo=await getPhotoData();
+ let m={
+   id:Date.now(), tower:Number(mt.value), apt:String(ma.value),
+   type:mk.value, note:mo.value.trim(), date:new Date().toISOString(),
+   status:'Pendiente',
+   residentId:r ? r.id : null,
+   residentName:r ? r.name : '',
+   residentPhone:r ? r.phone : '', photo:photo
+ };
+ mails.unshift(m);
+ localStorage.setItem(keyM,JSON.stringify(mails));
+ mo.value=''; packagePhoto.value=''; photoPreview.textContent='Puedes tomar una foto directamente con la cámara del celular o seleccionar una imagen.';
+ renderPending();
+ renderHistory();
+ showMailResident();
+ alert(r ? 'Paquete registrado para '+r.name+'.' : 'Paquete registrado. No hay residente asociado todavía.');
+}
+function normalizeWhatsApp(phone){
+ let p=String(phone||'').replace(/\D/g,'');
+ if(p.startsWith('00')) p=p.slice(2);
+ if(p.startsWith('57')) return p;
+ if(p.length===10 && p.startsWith('3')) return '57'+p;
+ return p;
+}
+function getMailResident(m){
+ if(m.residentName && m.residentPhone){
+   return {name:m.residentName,phone:m.residentPhone};
+ }
+ return findResident(m);
+}
+function viewPhoto(id){
+ let m=mails.find(x=>x.id===id);
+ if(!m || !m.photo){alert('Este paquete no tiene foto.');return}
+ let w=window.open('','_blank');
+ if(w) w.document.write('<title>Foto del paquete</title><body style="margin:0;background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh"><img src="'+m.photo+'" style="max-width:100%;max-height:100vh">
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(console.error));
+}
+</script>
+</body>');
+}
+function wa(id){
+ let m=mails.find(x=>x.id===id);
+ if(!m){alert('No se encontró el paquete.');return}
+ let r=getMailResident(m);
+ if(!r){alert('Este paquete no tiene un residente asociado. Puedes editar/registrar el residente y volver a crear el paquete.');return}
+ let phone=normalizeWhatsApp(r.phone);
+ if(!/^573\d{9}$/.test(phone)){
+   alert('El número no parece ser un celular colombiano válido. Verifica el número del residente.');
+   return;
+ }
+ let text=`Hola ${r.name}, le informamos que llegó un ${m.type.toLowerCase()} para el apartamento ${m.apt}, Torre ${m.tower}. Puede reclamarlo en portería.`;
+ let url='https://wa.me/'+phone+'?text='+encodeURIComponent(text);
+ window.open(url,'_blank');
+}
+function deliver(id){let m=mails.find(x=>x.id===id);if(m){m.status='Entregado';m.deliveredAt=new Date().toISOString();localStorage.setItem(keyM,JSON.stringify(mails));renderPending();renderHistory()}}
+function renderPending(){updateStats();let p=mails.filter(m=>m.status==='Pendiente');pending.innerHTML=p.length?'<table><tr><th>Torre/Apto</th><th>Tipo</th><th>Fecha</th><th>Acciones</th></tr>'+p.map(m=>`<tr><td>${m.tower}/${m.apt}</td><td>${m.type}</td><td>${new Date(m.date).toLocaleString('es-CO')}</td><td>${findResident(m)?'<span class="badge delivered">Residente OK</span>':'<span class="badge">Sin residente</span>'}<div class="actions"><button onclick="wa(${m.id})">WhatsApp</button><button class="green" onclick="deliver(${m.id})">Entregado</button></div></td></tr>`).join('')+'</table>':'<div class="card muted">No hay correspondencia pendiente.</div>'}
+function renderHistory(){updateStats();historyList.innerHTML=mails.length?'<table><tr><th>Torre/Apto</th><th>Tipo</th><th>Llegada</th><th>Estado</th></tr>'+mails.map(m=>`<tr><td>${m.tower}/${m.apt}</td><td>${m.type}${m.photo?'<br><button class="secondary" onclick="viewPhoto('+m.id+')">📷 Ver foto</button>':''}</td><td>${new Date(m.date).toLocaleString('es-CO')}</td><td><span class="badge ${m.status==='Entregado'?'delivered':''}">${m.status}</span></td></tr>`).join('')+'</table>':'<div class="card muted">Sin registros.</div>'}
+function show(id){document.querySelectorAll('main section').forEach(s=>s.classList.add('hidden'));document.getElementById(id).classList.remove('hidden');if(id==='residents')renderResidents();if(id==='mail')renderPending();if(id==='history')renderHistory()}
+setup();updateStats();showMailResident();
+</script>
+
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(console.error));
+}
+</script>
+</body></html>
