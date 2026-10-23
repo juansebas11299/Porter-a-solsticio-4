@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#9f1239">
 <link rel="manifest" href="manifest.json">
-<title>Portería Solsticio 4</title>
+<title>Portería Solsticio 4 · V14.2</title>
 <style>
 *{box-sizing:border-box}body{font-family:system-ui,-apple-system,Segoe UI,Arial,sans-serif;margin:0;background:#f8f1f2;color:#24212a;padding-bottom:76px}
 header{background:#9f1239;color:#fff;padding:13px 14px;position:sticky;top:0;z-index:5;box-shadow:0 2px 8px #0002}
@@ -203,14 +203,16 @@ table{width:100%;border-collapse:collapse;background:#fff;font-size:13px}th,td{p
   <h3 style="margin:0 0 8px">⚙ Herramientas de la aplicación</h3>
   <p class="muted">Copia de seguridad, exportación del historial de paquetes y mantenimiento.</p>
   <div class="search-controls"><button class="secondary" onclick="exportPackageBackup()">⬇ Crear copia de seguridad</button><button class="secondary" onclick="exportCorrespondenceCSV()">📦 Exportar historial de correspondencia</button><button class="secondary" onclick="diagnoseLocalStorage()">🔎 Revisar almacenamiento</button><button onclick="runRetentionCleanup(true)">🧹 Revisar limpieza</button></div>
+  <label for="backupRestoreFile" style="display:block;margin-top:12px">Restaurar desde un respaldo ZIP o JSON</label><input id="backupRestoreFile" type="file" accept=".zip,.json,application/zip,application/json"><button class="secondary" onclick="restorePackageBackup()">↩ Validar y restaurar respaldo</button><p class="muted">La restauración reemplaza los registros actuales después de validar el archivo y las fotos. Antes se descargará una copia de seguridad del estado actual.</p>
 </div>
 </section>
 </main>
+<div id="photoStorageNotice" role="status" style="margin:12px;padding:10px;border-radius:10px;background:#fff4f4;color:#7f1d1d;font-size:13px">Preparando almacenamiento local de fotografías… No cierres la aplicación durante esta comprobación.</div>
 <script>
 const towers=[1,2,3,4,5,6,7,8,9];
 const keyR='portería_residentes_v6', keyM='portería_correspondencia_v6', keyU='portería_usuarios_v1', keyCU='portería_usuario_actual_v1';
 let users=JSON.parse(localStorage.getItem(keyU)||'[]');
-if(!users.length){users=[{id:1,name:'Guarda de portería'}];localStorage.setItem(keyU,JSON.stringify(users));}
+if(!users.length){users=[{id:1,name:'Guarda de portería'}];} // Valor predeterminado solo en memoria; no escribir datos al iniciar.
 let currentUserId=Number(localStorage.getItem(keyCU))||users[0].id;
 function currentUser(){return users.find(u=>Number(u.id)===Number(currentUserId))||users[0];}
 function setCurrentUser(){currentUserId=Number(document.getElementById('currentUser').value);localStorage.setItem(keyCU,String(currentUserId));renderUsers();}
@@ -220,13 +222,118 @@ function renderUsers(){let sel=document.getElementById('currentUser');if(!sel)re
 
 let residents=JSON.parse(localStorage.getItem(keyR)||'[]');
 let mails=JSON.parse(localStorage.getItem(keyM)||'[]');
+let photoStorageReady=false;
+let photoStorageError='';
+const PHOTO_DB_NAME='PorteriaSolsticio4_Photos_v1', PHOTO_STORE='photos', PHOTO_META_STORE='meta';
+function openPhotoDB(){return new Promise((resolve,reject)=>{if(!('indexedDB' in window)){reject(new Error('Este navegador no permite IndexedDB'));return;}const req=indexedDB.open(PHOTO_DB_NAME,2);req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains(PHOTO_STORE))db.createObjectStore(PHOTO_STORE,{keyPath:'id'});if(!db.objectStoreNames.contains(PHOTO_META_STORE))db.createObjectStore(PHOTO_META_STORE,{keyPath:'key'});};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error||new Error('No se pudo abrir IndexedDB'));});}
+async function photoDBPut(id,data){const db=await openPhotoDB();try{await new Promise((resolve,reject)=>{const tx=db.transaction(PHOTO_STORE,'readwrite');tx.objectStore(PHOTO_STORE).put({id:String(id),data:String(data)});tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error||new Error('No se pudo guardar una foto'));tx.onabort=()=>reject(tx.error||new Error('Se canceló el guardado de una foto'));});}finally{db.close();}}
+async function photoDBGet(id){const db=await openPhotoDB();try{return await new Promise((resolve,reject)=>{const tx=db.transaction(PHOTO_STORE,'readonly');const req=tx.objectStore(PHOTO_STORE).get(String(id));req.onsuccess=()=>resolve(req.result?req.result.data:'');req.onerror=()=>reject(req.error||new Error('No se pudo leer una foto'));});}finally{db.close();}}
+async function photoDBGetMeta(key){const db=await openPhotoDB();try{return await new Promise((resolve,reject)=>{const tx=db.transaction(PHOTO_META_STORE,'readonly');const req=tx.objectStore(PHOTO_META_STORE).get(String(key));req.onsuccess=()=>resolve(req.result||null);req.onerror=()=>reject(req.error||new Error('No se pudo leer la verificación de una foto'));});}finally{db.close();}}
+async function photoDBPutMeta(value){const db=await openPhotoDB();try{await new Promise((resolve,reject)=>{const tx=db.transaction(PHOTO_META_STORE,'readwrite');tx.objectStore(PHOTO_META_STORE).put(value);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error||new Error('No se pudo guardar el progreso de migración'));tx.onabort=()=>reject(tx.error||new Error('Se canceló el progreso de migración'));});}finally{db.close();}}
+async function photoDBApplyPackages(packages){const db=await openPhotoDB();try{await new Promise((resolve,reject)=>{const tx=db.transaction([PHOTO_STORE,PHOTO_META_STORE],'readwrite');const photos=tx.objectStore(PHOTO_STORE),meta=tx.objectStore(PHOTO_META_STORE);for(const m of packages){const id=String(m.id);if(m.photo){photos.put({id,data:String(m.photo)});meta.put({key:'photo:'+id,id,sha256:null});}else{photos.delete(id);meta.delete('photo:'+id);}}tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error||new Error('No se pudieron aplicar las fotografías del respaldo'));tx.onabort=()=>reject(tx.error||new Error('Se canceló la restauración de fotografías'));});}finally{db.close();}}
+async function photoDBSetHash(id,hash){await photoDBPutMeta({key:'photo:'+String(id),id:String(id),sha256:hash,verifiedAt:new Date().toISOString()});}
+function mailsForStorage(list=mails){return list.map(m=>{const copy={...m};if(copy.photo)delete copy.photo;else if(Object.prototype.hasOwnProperty.call(copy,'photo'))copy.photo=copy.photo||'';return copy;});}
+function persistMails(list=mails){const raw=JSON.stringify(mailsForStorage(list));localStorage.setItem(keyM,raw);const saved=localStorage.getItem(keyM)||'[]';const check=JSON.parse(saved);if(!Array.isArray(check)||check.length!==list.length||saved!==raw)throw new Error('No se pudo verificar exactamente el guardado de los registros');}
+function base64ImageBytes(data){if(typeof data!=='string'||!/^data:image\/[a-z0-9.+-]+;base64,/i.test(data))throw new Error('La fotografía no es una imagen Base64 válida');const payload=data.slice(data.indexOf(',')+1);let binary;try{binary=atob(payload);}catch(e){throw new Error('No se pudo decodificar una fotografía Base64');}const bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);if(!bytes.length)throw new Error('La fotografía está vacía');return bytes;}
+async function sha256Image(data){const bytes=base64ImageBytes(data);if(!crypto||!crypto.subtle)throw new Error('SHA-256 no está disponible en este navegador seguro');const digest=await crypto.subtle.digest('SHA-256',bytes);return Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');}
+function sameJson(a,b){return JSON.stringify(a)===JSON.stringify(b);}
+async function initializePhotoStorage(){
+ const originalMailsStored=localStorage.getItem(keyM);
+ const originalResidentsStored=localStorage.getItem(keyR);
+ const originalUsersStored=localStorage.getItem(keyU);
+ // Separar el valor real del almacenamiento (que puede ser null) del valor predeterminado para analizar JSON.
+ const originalMailsRaw=originalMailsStored===null?'[]':originalMailsStored;
+ const originalResidentsRaw=originalResidentsStored===null?'[]':originalResidentsStored;
+ const originalUsersRaw=originalUsersStored===null?'[]':originalUsersStored;
+ try{
+  const source=JSON.parse(originalMailsRaw),sourceResidents=JSON.parse(originalResidentsRaw),sourceUsers=JSON.parse(originalUsersRaw);
+  if(!Array.isArray(source)||!Array.isArray(sourceResidents)||!Array.isArray(sourceUsers))throw new Error('Los datos locales no tienen el formato esperado. No se modificó localStorage.');
+  const ids=new Set();for(const m of source){if(m.id===undefined||m.id===null||ids.has(String(m.id)))throw new Error('Hay un identificador de paquete ausente o repetido. No se modificó localStorage.');ids.add(String(m.id));}
+  const db=await openPhotoDB();db.close();
+  await photoDBPutMeta({key:'migration-v2',version:2,phase:'copying',total:source.length,done:0,startedAt:new Date().toISOString()});
+  const enriched=[];let done=0,photoCount=0;
+  for(const original of source){
+   const m={...original};let data=typeof original.photo==='string'?original.photo:'';
+   if(data){
+    const expectedHash=await sha256Image(data);
+    await photoDBPut(m.id,data);
+    const stored=await photoDBGet(m.id);
+    if(!stored||stored!==data)throw new Error('La comparación exacta falló para la fotografía del paquete '+m.id+'.');
+    const storedHash=await sha256Image(stored);
+    if(storedHash!==expectedHash)throw new Error('SHA-256 no coincide para la fotografía del paquete '+m.id+'.');
+    await photoDBSetHash(m.id,storedHash);photoCount++;
+   }else{
+    const stored=await photoDBGet(m.id);
+    if(!stored){const missingMeta=await photoDBGetMeta('photo:'+String(m.id));if(missingMeta&&missingMeta.sha256)throw new Error('Existe una referencia verificada pero falta la foto del paquete '+m.id+'. No se modificó localStorage.');}
+    if(stored){
+     const hash=await sha256Image(stored),meta=await photoDBGetMeta('photo:'+String(m.id));
+     if(meta&&meta.sha256&&meta.sha256!==hash)throw new Error('SHA-256 no coincide con la fotografía previamente migrada del paquete '+m.id+'.');
+     // En fotos heredadas sin hash no existe una copia Base64 en localStorage para comparar; se calcula y registra el hash actual sin borrar ninguna fuente.
+     if(!meta||!meta.sha256)await photoDBSetHash(m.id,hash);
+     data=stored;photoCount++;
+    }
+   }
+   if(data)m.photo=data;
+   enriched.push(m);done++;
+   await photoDBPutMeta({key:'migration-v2',version:2,phase:'copying',total:source.length,done,lastPackageId:String(m.id),startedAt:new Date().toISOString()});
+  }
+  // Confirmar identidades y cantidades antes de quitar Base64 del localStorage.
+  if(enriched.length!==source.length||sourceResidents.length!==JSON.parse(originalResidentsRaw).length||sourceUsers.length!==JSON.parse(originalUsersRaw).length)throw new Error('La cantidad de registros cambió durante la comprobación.');
+  for(let i=0;i<source.length;i++){
+   const expected={...source[i]};if(expected.photo)delete expected.photo;else if(Object.prototype.hasOwnProperty.call(expected,'photo'))expected.photo=expected.photo||'';
+   const actual={...mailsForStorage([enriched[i]])[0]};
+   if(!sameJson(expected,actual))throw new Error('La verificación de campos del paquete '+source[i].id+' falló. No se retirarán las fotografías originales.');
+  }
+  if(localStorage.getItem(keyR)!==originalResidentsStored||localStorage.getItem(keyU)!==originalUsersStored)throw new Error('Los residentes o usuarios cambiaron durante la migración.');
+  const metadata=mailsForStorage(enriched),metadataRaw=JSON.stringify(metadata);
+  // Este es el único paso que reemplaza la lista original; solo ocurre después de verificar las fotos y los campos.
+  localStorage.setItem(keyM,metadataRaw);
+  if(localStorage.getItem(keyM)!==metadataRaw||!sameJson(JSON.parse(localStorage.getItem(keyM)||'[]'),metadata)){
+   if(originalMailsStored===null)localStorage.removeItem(keyM);else localStorage.setItem(keyM,originalMailsStored);
+   throw new Error('No se pudo verificar la lista migrada; se restauró la lista original de paquetes.');
+  }
+  await photoDBPutMeta({key:'migration-v2',version:2,phase:'complete',total:source.length,done:source.length,photos:photoCount,completedAt:new Date().toISOString()});
+  mails=enriched;photoStorageReady=true;photoStorageError='';
+  const status=document.getElementById('photoStorageNotice');if(status)status.textContent='Almacenamiento local preparado: '+photoCount+' fotografía(s) verificadas con SHA-256; '+source.length+' paquetes y '+sourceResidents.length+' residentes comprobados.';
+  renderPending();renderHistory();updateStats();
+ }catch(e){
+  // Ante cualquier fallo, mantener/restaurar el JSON original de paquetes con Base64 si la escritura final ya había comenzado.
+  try{if(localStorage.getItem(keyM)!==originalMailsStored){if(originalMailsStored===null)localStorage.removeItem(keyM);else localStorage.setItem(keyM,originalMailsStored);}}catch(restoreError){console.error('No se pudo restaurar el JSON original automáticamente:',restoreError);}
+  try{mails=JSON.parse(localStorage.getItem(keyM)||originalMailsRaw);}catch(_){mails=[];}
+  photoStorageReady=false;photoStorageError=e.message||'Error de almacenamiento';
+  const status=document.getElementById('photoStorageNotice');if(status)status.textContent='Migración detenida por seguridad. No se eliminaron las fotografías originales de localStorage. No registres paquetes ni limpies el navegador. Detalle: '+photoStorageError;
+  console.error('Photo storage migration:',e);
+ }
+}
 let historyFilterActive=false;
 const RETENTION_MONTHS=6;
 function retentionDate(m){const raw=m.date||m.receivedAt||m.createdAt||m.fecha||m.fechaRegistro;const d=raw?new Date(raw):new Date(Number(m.id)||Date.now());return Number.isNaN(d.getTime())?new Date():d;}
 function retentionExpired(m,now=new Date()){const d=retentionDate(m);const limit=new Date(d);limit.setMonth(limit.getMonth()+RETENTION_MONTHS);return limit<=now;}
 function eligibleForRetention(m,now=new Date()){return m.status==='Entregado'&&retentionExpired(m,now);}
 function updateRetentionSummary(){/* La conservación se administra en segundo plano; no se muestra un panel permanente. */}
-function exportPackageBackup(silent=false){try{const payload={app:'Portería Solsticio 4',formatVersion:1,createdAt:new Date().toISOString(),retentionMonths:RETENTION_MONTHS,residents:JSON.parse(localStorage.getItem(keyR)||'[]'),packages:JSON.parse(localStorage.getItem(keyM)||'[]'),users:JSON.parse(localStorage.getItem(keyU)||'[]')};const content=JSON.stringify(payload);const bytes=new TextEncoder().encode(content);const blob=makeZip('Respaldo_Porteria_Solsticio_4.json',bytes);const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='Respaldo_Porteria_Solsticio_4_'+new Date().toISOString().slice(0,10)+'.zip';document.body.appendChild(a);a.click();a.remove();const size=blob.size;setTimeout(()=>URL.revokeObjectURL(url),10000);if(!silent)alert('Copia de seguridad descargada como archivo ZIP. Tamaño: '+(size<1024*1024?(size/1024).toFixed(1)+' KB':(size/1024/1024).toFixed(2)+' MB')+'. No abras el ZIP en el navegador: guárdalo en Descargas. Dentro encontrarás el archivo JSON de respaldo. Incluye residentes, paquetes, usuarios y fotos guardadas dentro de los registros.');return true;}catch(e){if(!silent)alert('No fue posible crear la copia de seguridad. No se borró ningún registro.');return false;}}
+async function exportPackageBackup(silent=false){if(!photoStorageReady){if(!silent)alert('Espera a que termine la verificación del almacenamiento de fotos antes de crear un nuevo respaldo. Conserva el ZIP original.');return false;}try{const packages=[];for(const m of mails){const copy={...m};const stored=await photoDBGet(m.id);if(copy.photo){if(!stored||stored!==copy.photo)throw new Error('No coincide la fotografía del paquete '+m.id+' con IndexedDB.');const hash=await sha256Image(stored),meta=await photoDBGetMeta('photo:'+String(m.id));if(meta&&meta.sha256&&meta.sha256!==hash)throw new Error('SHA-256 no coincide para el paquete '+m.id+'.');copy.photo=stored;}else if(stored){const hash=await sha256Image(stored),meta=await photoDBGetMeta('photo:'+String(m.id));if(meta&&meta.sha256&&meta.sha256!==hash)throw new Error('SHA-256 no coincide para el paquete '+m.id+'.');copy.photo=stored;}else {const missingMeta=await photoDBGetMeta('photo:'+String(m.id));if(missingMeta&&missingMeta.sha256)throw new Error('Falta la foto registrada para el paquete '+m.id+'; no se creará un respaldo incompleto.');copy.photo='';}packages.push(copy);}const payload={app:'Portería Solsticio 4',formatVersion:1,createdAt:new Date().toISOString(),retentionMonths:RETENTION_MONTHS,residents:JSON.parse(localStorage.getItem(keyR)||'[]'),packages,users:JSON.parse(localStorage.getItem(keyU)||'[]')};const content=JSON.stringify(payload);const bytes=new TextEncoder().encode(content);const blob=makeZip('Respaldo_Porteria_Solsticio_4.json',bytes);const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='Respaldo_Porteria_Solsticio_4_'+new Date().toISOString().slice(0,10)+'.zip';document.body.appendChild(a);a.click();a.remove();const size=blob.size;setTimeout(()=>URL.revokeObjectURL(url),10000);if(!silent)alert('Copia de seguridad ZIP descargada y verificada. Tamaño: '+(size<1024*1024?(size/1024).toFixed(1)+' KB':(size/1024/1024).toFixed(2)+' MB')+'. Incluye residentes, paquetes, usuarios y fotografías disponibles.');return true;}catch(e){console.error('Exportación de respaldo:',e);if(!silent)alert('No fue posible verificar o crear el respaldo. No se borró ningún registro. Detalle: '+(e.message||e));return false;}}
+function crc32Bytes(data){let crc=0xffffffff;for(let i=0;i<data.length;i++){crc^=data[i];for(let j=0;j<8;j++)crc=(crc>>>1)^((crc&1)?0xedb88320:0);}return (crc^0xffffffff)>>>0;}
+async function extractJsonFromZip(buffer){const bytes=new Uint8Array(buffer),view=new DataView(buffer);let eocd=-1;for(let i=bytes.length-22;i>=Math.max(0,bytes.length-65557);i--){if(view.getUint32(i,true)===0x06054b50){eocd=i;break;}}if(eocd<0)throw new Error('El archivo no parece ser un ZIP válido.');const entries=view.getUint16(eocd+10,true),centralOffset=view.getUint32(eocd+16,true),decoder=new TextDecoder();let offset=centralOffset;for(let n=0;n<entries;n++){if(view.getUint32(offset,true)!==0x02014b50)throw new Error('Directorio ZIP inválido.');const method=view.getUint16(offset+10,true),crc=view.getUint32(offset+16,true),compressed=view.getUint32(offset+20,true),uncompressed=view.getUint32(offset+24,true),nameLen=view.getUint16(offset+28,true),extraLen=view.getUint16(offset+30,true),commentLen=view.getUint16(offset+32,true),localOffset=view.getUint32(offset+42,true),name=decoder.decode(bytes.slice(offset+46,offset+46+nameLen));if(name.toLowerCase().endsWith('.json')){if(view.getUint32(localOffset,true)!==0x04034b50)throw new Error('Cabecera del archivo JSON dentro del ZIP inválida.');const localName=view.getUint16(localOffset+26,true),localExtra=view.getUint16(localOffset+28,true),dataStart=localOffset+30+localName+localExtra,compressedBytes=bytes.slice(dataStart,dataStart+compressed);let out;if(method===0)out=compressedBytes;else if(method===8){if(typeof DecompressionStream==='undefined')throw new Error('Este navegador no puede descomprimir ZIP deflate. Extrae el JSON del ZIP y selecciónalo directamente.');const stream=new Blob([compressedBytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));out=new Uint8Array(await new Response(stream).arrayBuffer());}else throw new Error('El ZIP usa un método de compresión no compatible ('+method+').');if(out.length!==uncompressed||crc32Bytes(out)!==crc)throw new Error('La comprobación CRC/tamaño del JSON dentro del ZIP falló.');return decoder.decode(out);}offset+=46+nameLen+extraLen+commentLen;}throw new Error('El ZIP no contiene un archivo JSON de respaldo.');}
+async function readBackupPayload(file){const buffer=await file.arrayBuffer(),bytes=new Uint8Array(buffer);let text;if(bytes[0]===0x50&&bytes[1]===0x4b)text=await extractJsonFromZip(buffer);else text=new TextDecoder().decode(bytes);const payload=JSON.parse(text);if(!payload||!Array.isArray(payload.residents)||!Array.isArray(payload.packages)||!Array.isArray(payload.users))throw new Error('El respaldo no contiene las listas de residentes, paquetes y usuarios esperadas.');const unique=(arr,label)=>{const ids=new Set();for(const item of arr){if(item.id===undefined||item.id===null||ids.has(String(item.id)))throw new Error('Hay identificadores ausentes o repetidos en '+label+'.');ids.add(String(item.id));}};unique(payload.residents,'residentes');unique(payload.packages,'paquetes');unique(payload.users,'usuarios');for(const m of payload.packages){if(m.photo){const hash=await sha256Image(m.photo);if(!hash)throw new Error('No se pudo verificar una foto del respaldo.');}}return payload;}
+async function restorePackageBackup(){if(!photoStorageReady){alert('El almacenamiento de fotos no está listo. No se restauró nada. Conserva el respaldo original.');return;}const input=document.getElementById('backupRestoreFile'),file=input&&input.files&&input.files[0];if(!file){alert('Selecciona primero un archivo ZIP o JSON de respaldo.');return;}let payload;try{payload=await readBackupPayload(file);}catch(e){alert('El respaldo no superó la validación. No se modificó ningún dato. Detalle: '+(e.message||e));return;}if(!confirm('Se validó el respaldo: '+payload.residents.length+' residentes, '+payload.packages.length+' paquetes y '+payload.users.length+' usuarios. La restauración reemplazará los registros actuales. Antes se descargará una copia de seguridad del estado actual. ¿Continuar?'))return;if(!await exportPackageBackup(true)){alert('No se pudo descargar la copia de seguridad previa. No se restauró nada.');return;}if(!confirm('Última confirmación: ¿reemplazar los registros actuales por los del archivo seleccionado?'))return;
+ const oldLocal={};for(const k of [keyR,keyM,keyU,keyCU])oldLocal[k]=localStorage.getItem(k);const packageIds=payload.packages.map(m=>String(m.id));const oldPhotos={},oldMeta={};
+ try{
+  for(const id of packageIds){oldPhotos[id]=await photoDBGet(id);oldMeta[id]=await photoDBGetMeta('photo:'+id);}
+  await photoDBApplyPackages(payload.packages);
+  for(const m of payload.packages){if(m.photo){const stored=await photoDBGet(m.id);if(stored!==m.photo||await sha256Image(stored)!==await sha256Image(m.photo))throw new Error('Falló la verificación posterior de la foto del paquete '+m.id+'.');await photoDBSetHash(m.id,await sha256Image(stored));}}
+  const metadata=mailsForStorage(payload.packages),rawM=JSON.stringify(metadata),rawR=JSON.stringify(payload.residents),rawU=JSON.stringify(payload.users);const currentId=payload.users.some(u=>String(u.id)===String(oldLocal[keyCU]))?oldLocal[keyCU]:String(payload.users[0]?.id??'');
+  localStorage.setItem(keyR,rawR);localStorage.setItem(keyM,rawM);localStorage.setItem(keyU,rawU);if(currentId)localStorage.setItem(keyCU,currentId);else localStorage.removeItem(keyCU);
+  if(localStorage.getItem(keyR)!==rawR||localStorage.getItem(keyM)!==rawM||localStorage.getItem(keyU)!==rawU)throw new Error('No se pudieron verificar los registros restaurados.');
+  residents=payload.residents.map(normalizeResident);mails=payload.packages.map(m=>({...m,photo:m.photo||''}));users=payload.users;currentUserId=Number(currentId)||users[0]?.id;photoStorageReady=true;photoStorageError='';setup();updateStats();showMailResident();updateRetentionSummary();renderPending();renderHistory();
+  await photoDBPutMeta({key:'migration-v2',version:2,phase:'complete',total:mails.length,done:mails.length,photos:mails.filter(m=>m.photo).length,completedAt:new Date().toISOString()});
+  alert('Respaldo restaurado y verificado. Residentes: '+residents.length+'; paquetes: '+mails.length+'; fotografías: '+mails.filter(m=>m.photo).length+'. Conserva también el ZIP de seguridad que se descargó antes.');input.value='';
+ }catch(e){
+  try{for(const [k,v] of Object.entries(oldLocal)){if(v===null)localStorage.removeItem(k);else localStorage.setItem(k,v);}}catch(rollbackLocalError){console.error('Rollback localStorage:',rollbackLocalError);}
+  try{const db=await openPhotoDB();await new Promise((resolve,reject)=>{const tx=db.transaction([PHOTO_STORE,PHOTO_META_STORE],'readwrite'),photos=tx.objectStore(PHOTO_STORE),meta=tx.objectStore(PHOTO_META_STORE);for(const id of packageIds){if(oldPhotos[id])photos.put({id,data:oldPhotos[id]});else photos.delete(id);if(oldMeta[id])meta.put(oldMeta[id]);else meta.delete('photo:'+id);}tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});db.close();}catch(rollbackPhotoError){console.error('Rollback IndexedDB:',rollbackPhotoError);}
+  try{residents=JSON.parse(localStorage.getItem(keyR)||'[]').map(normalizeResident);users=JSON.parse(localStorage.getItem(keyU)||'[]');mails=JSON.parse(localStorage.getItem(keyM)||'[]');currentUserId=Number(localStorage.getItem(keyCU))||users[0]?.id;setup();}catch(_){}
+  alert('La restauración se detuvo. Se intentó recuperar el estado anterior y no se borró el archivo de respaldo. Detalle: '+(e.message||e)+'. Verifica los registros y conserva ambos ZIP.');
+ }
+}
 async function diagnoseLocalStorage(){
   const keys=[keyR,keyM,keyU,keyCU];
   let lines=['Diagnóstico de almacenamiento (solo lectura):'];
@@ -244,10 +351,10 @@ async function diagnoseLocalStorage(){
   alert(lines.join('\n'));
 }
 
-async function exportAllDataExcel(){
+async function exportAllDataExcel(){if(!photoStorageReady){alert('Espera a que termine la verificación del almacenamiento de fotos.');return;}
  try{
   const rs=JSON.parse(localStorage.getItem(keyR)||'[]').map(normalizeResident).sort((a,b)=>residentTowerOf(a)-residentTowerOf(b)||Number(residentAptOf(a))-Number(residentAptOf(b))||String(a.name).localeCompare(String(b.name),'es'));
-  const ps=JSON.parse(localStorage.getItem(keyM)||'[]').slice().sort((a,b)=>new Date(a.date||a.receivedAt||0)-new Date(b.date||b.receivedAt||0));
+  const ps=mails.slice().sort((a,b)=>new Date(a.date||a.receivedAt||0)-new Date(b.date||b.receivedAt||0));
   const us=JSON.parse(localStorage.getItem(keyU)||'[]');
   const sheets=[
    {name:'Residentes',rows:[['Torre','Apartamento','Nombre','Teléfono','Observaciones'],...rs.map(r=>[residentTowerOf(r),residentAptOf(r),r.name||'',r.phone||'',r.obs||r.observaciones||''])]},
@@ -279,7 +386,7 @@ function makeZipFiles(files){
  const csize=centrals.reduce((n,x)=>n+x.length,0),end=new Uint8Array([...u32(0x06054b50),...u16(0),...u16(0),...u16(files.length),...u16(files.length),...u32(csize),...u32(offset),...u16(0)]);return new Blob([...locals,...centrals,end],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
 }
 function makeZip(filename,data){const enc=new TextEncoder(),name=enc.encode(filename);let crc=0xffffffff;for(let i=0;i<data.length;i++){crc^=data[i];for(let j=0;j<8;j++)crc=(crc>>>1)^((crc&1)?0xedb88320:0);}crc=(crc^0xffffffff)>>>0;const u16=n=>[n&255,(n>>>8)&255],u32=n=>[n&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255];const local=new Uint8Array([...u32(0x04034b50),...u16(20),...u16(0),...u16(0),...u16(0),...u16(0),...u32(crc),...u32(data.length),...u32(data.length),...u16(name.length),...u16(0),...name,...data]);const central=new Uint8Array([...u32(0x02014b50),...u16(20),...u16(20),...u16(0),...u16(0),...u16(0),...u16(0),...u32(crc),...u32(data.length),...u32(data.length),...u16(name.length),...u16(0),...u16(0),...u16(0),...u16(0),...u32(0),...u32(0),...name]);const end=new Uint8Array([...u32(0x06054b50),...u16(0),...u16(0),...u16(1),...u16(1),...u32(central.length),...u32(local.length),...u16(0)]);return new Blob([local,central,end],{type:'application/zip'});}
-function runRetentionCleanup(manual=false){const expired=mails.filter(eligibleForRetention);updateRetentionSummary();if(!expired.length){if(manual)alert('No hay paquetes entregados que hayan cumplido los 6 meses. Los pendientes se conservan.');return;}if(!manual)return;const ok=confirm(`Hay ${expired.length} paquete(s) entregado(s) con 6 meses o más. Antes de eliminarlos se descargará una copia de seguridad. ¿Deseas continuar? Los paquetes pendientes no se borrarán.`);if(!ok)return;if(!exportPackageBackup(true)){alert('No se pudo crear el respaldo. No se borró ningún registro.');return;}if(!confirm('Confirma la eliminación de los registros entregados vencidos y sus fotos asociadas. La copia de seguridad ya se descargó. ¿Eliminar ahora?'))return;const before=mails.length;mails=mails.filter(m=>!eligibleForRetention(m));try{localStorage.setItem(keyM,JSON.stringify(mails));const saved=JSON.parse(localStorage.getItem(keyM)||'[]');if(saved.length!==mails.length)throw new Error('Verificación fallida');renderPending();renderHistory();updateRetentionSummary();alert(`Limpieza terminada. Se eliminaron ${before-mails.length} registro(s) vencido(s).`);}catch(e){alert('No se pudo confirmar el guardado de la limpieza. Revisa el almacenamiento; conserva la copia de seguridad descargada.');}}
+async function runRetentionCleanup(manual=false){if(!photoStorageReady){if(manual)alert('El almacenamiento de fotos no está listo. No se eliminó ningún registro.');return;}const expired=mails.filter(eligibleForRetention);updateRetentionSummary();if(!expired.length){if(manual)alert('No hay paquetes entregados que hayan cumplido los 6 meses. Los pendientes se conservan.');return;}if(!manual)return;const ok=confirm(`Hay ${expired.length} paquete(s) entregado(s) con 6 meses o más. Antes de eliminarlos se descargará una copia de seguridad. ¿Deseas continuar? Los paquetes pendientes no se borrarán.`);if(!ok)return;if(!await exportPackageBackup(true)){alert('No se pudo crear el respaldo. No se borró ningún registro.');return;}if(!confirm('Confirma la eliminación de los registros entregados vencidos y sus fotos asociadas. La copia de seguridad ya se descargó. ¿Eliminar ahora?'))return;const before=mails.length;mails=mails.filter(m=>!eligibleForRetention(m));try{persistMails(mails);const saved=JSON.parse(localStorage.getItem(keyM)||'[]');if(saved.length!==mails.length)throw new Error('Verificación fallida');renderPending();renderHistory();updateRetentionSummary();alert(`Limpieza terminada. Se eliminaron ${before-mails.length} registro(s) vencido(s).`);}catch(e){alert('No se pudo confirmar el guardado de la limpieza. Revisa el almacenamiento; conserva la copia de seguridad descargada.');}}
 function checkRetentionOnOpen(){const expired=mails.filter(eligibleForRetention);updateRetentionSummary();if(!expired.length)return;setTimeout(()=>{if(confirm(`Mantenimiento del historial: hay ${expired.length} paquete(s) entregado(s) con 6 meses o más. ¿Quieres crear una copia de seguridad y revisar su eliminación ahora? Los pendientes se conservarán.`))runRetentionCleanup(true);},700);}
 
 // Compatibilidad con registros guardados por versiones anteriores.
@@ -287,7 +394,7 @@ function residentTowerOf(r){const raw=r?.tower??r?.torre??r?.towerId??r?.torreId
 function residentAptOf(r){const raw=r?.apt??r?.apartment??r?.apartamento??r?.apartmentNumber??r?.numeroApartamento??'';const m=String(raw).match(/\d+/);return m?String(Number(m[0])):String(raw);}
 function normalizeResident(r){return {...r,tower:residentTowerOf(r),apt:residentAptOf(r),name:String(r?.name??r?.nombre??''),phone:String(r?.phone??r?.telefono??r?.celular??'')};}
 residents=residents.map(normalizeResident);
-try{localStorage.setItem(keyR,JSON.stringify(residents));}catch(e){/* No borrar ni bloquear la vista si el almacenamiento está lleno. */}
+// No reescribir la lista original al iniciar: la migración debe comenzar en modo de solo lectura.
 if(!residents.length){
  ['portería_residentes_v3','portería_residentes_v2','portería_residentes_v1'].some(k=>{
    try{let oldData=JSON.parse(localStorage.getItem(k)||'[]');if(oldData.length){residents=oldData;localStorage.setItem(keyR,JSON.stringify(residents));return true}}catch(e){}
@@ -303,8 +410,8 @@ function quickFind(){
  if(!rs.length){quickResult.innerHTML=`<b>Torre ${t} · Apartamento ${a}</b><br>Sin residente registrado<br><span class="muted">${ms.length} correspondencia pendiente</span><br><button class="secondary" style="margin-top:10px" onclick="showRegisterForm(${t},'${a}')">＋ Registrar residente</button>`;return}
  quickResult.innerHTML=`<b>Torre ${t} · Apartamento ${a}</b>`+rs.map(r=>`<div class="person-row"><div><b>${escapeHtml(r.name)}</b><br><span class="muted">${escapeHtml(r.phone)}</span></div><div class="person-actions"><button class="icon-btn green" title="Llamar" aria-label="Llamar" onclick="callResident(${r.id})">📞</button><button class="icon-btn whatsapp" title="Abrir WhatsApp" aria-label="Abrir WhatsApp" onclick="waResident(${r.id})"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 2.1a9.6 9.6 0 0 0-8.25 14.5L2.5 21.5l5.05-1.32A9.6 9.6 0 1 0 12 2.1Zm0 17.45a7.8 7.8 0 0 1-3.98-1.09l-.29-.17-2.99.78.8-2.91-.19-.3A7.82 7.82 0 1 1 12 19.55Z"/><path fill="currentColor" d="M16.3 13.65c-.24-.12-1.4-.69-1.62-.77-.22-.08-.38-.12-.54.12-.16.24-.62.77-.76.93-.14.16-.28.18-.52.06-.24-.12-1.01-.37-1.93-1.19-.71-.63-1.19-1.41-1.33-1.65-.14-.24-.02-.37.1-.49.11-.11.24-.28.36-.42.12-.14.16-.24.24-.4.08-.16.04-.3-.02-.42-.06-.12-.54-1.3-.74-1.78-.2-.47-.4-.4-.54-.41h-.46c-.16 0-.42.06-.64.3-.22.24-.84.82-.84 2s.86 2.31.98 2.47c.12.16 1.69 2.58 4.1 3.62.57.25 1.02.4 1.37.51.58.18 1.1.15 1.51.09.46-.07 1.4-.57 1.6-1.12.2-.55.2-1.02.14-1.12-.06-.1-.22-.16-.46-.28Z"/></svg></button></div></div>`).join('')+`<span class="muted">${ms.length} correspondencia pendiente</span>`;
 }
-function exportCorrespondenceCSV(){
- const ps=JSON.parse(localStorage.getItem(keyM)||'[]').slice().sort((a,b)=>new Date(a.date||a.receivedAt||0)-new Date(b.date||b.receivedAt||0));
+function exportCorrespondenceCSV(){if(!photoStorageReady){alert('Espera a que termine la verificación del almacenamiento de fotos.');return;}
+ const ps=mails.slice().sort((a,b)=>new Date(a.date||a.receivedAt||0)-new Date(b.date||b.receivedAt||0));
  if(!ps.length){alert('No hay registros de correspondencia para exportar.');return;}
  const headers=['ID paquete','Torre','Apartamento','Tipo','Estado','Fecha de llegada','Guarda que recibió','Fecha y hora de recepción','Guarda que entregó','Fecha y hora de entrega','Residente asociado','Teléfono del residente','Observaciones','Tiene fotografía','Datos de fotografía incluidos','Notificación WhatsApp'];
  const val=(v)=>String(v??'').replace(/[\r\n]+/g,' ').trim();
@@ -403,6 +510,7 @@ function renderResidents(){
  residentList.innerHTML=filtered.length?'<div class="card">'+filtered.map(r=>`<div class="person-row"><div style="min-width:0"><span class="location-badge"><span class="loc-label">Torre</span><span class="loc-value">${residentTowerOf(r)}</span><span class="loc-label">Apartamento</span><span class="loc-value">${residentAptOf(r)}</span></span><br><b>${escapeHtml(r.name)}</b><br><span class="muted">${escapeHtml(r.phone)}</span></div><div class="person-actions"><button class="icon-btn green" title="Llamar" aria-label="Llamar" onclick="callResident(${r.id})">📞</button><button class="icon-btn whatsapp" title="Abrir WhatsApp" aria-label="Abrir WhatsApp" onclick="waResident(${r.id})"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 2.1a9.6 9.6 0 0 0-8.25 14.5L2.5 21.5l5.05-1.32A9.6 9.6 0 1 0 12 2.1Zm0 17.45a7.8 7.8 0 0 1-3.98-1.09l-.29-.17-2.99.78.8-2.91-.19-.3A7.82 7.82 0 1 1 12 19.55Z"/><path fill="currentColor" d="M16.3 13.65c-.24-.12-1.4-.69-1.62-.77-.22-.08-.38-.12-.54.12-.16.24-.62.77-.76.93-.14.16-.28.18-.52.06-.24-.12-1.01-.37-1.93-1.19-.71-.63-1.19-1.41-1.33-1.65-.14-.24-.02-.37.1-.49.11-.11.24-.28.36-.42.12-.14.16-.24.24-.4.08-.16.04-.3-.02-.42-.06-.12-.54-1.3-.74-1.78-.2-.47-.4-.4-.54-.41h-.46c-.16 0-.42.06-.64.3-.22.24-.84.82-.84 2s.86 2.31.98 2.47c.12.16 1.69 2.58 4.1 3.62.57.25 1.02.4 1.37.51.58.18 1.1.15 1.51.09.46-.07 1.4-.57 1.6-1.12.2-.55.2-1.02.14-1.12-.06-.1-.22-.16-.46-.28Z"/></svg></button><button class="icon-btn edit-btn" title="Editar residente" aria-label="Editar residente" onclick="editResident(${r.id})"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="M12 20h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button class="icon-btn delete-btn" title="Eliminar residente" aria-label="Eliminar residente" onclick="deleteResident(${r.id})">🗑️</button></div></div>`).join('')+'</div>':'<div class="card muted">No hay residentes registrados en la Torre '+selected+'.</div>';
 }
 function editResident(id){
+ if(!photoStorageReady){alert('El almacenamiento de fotos aún no está listo. No se modificó el residente. '+photoStorageError);return;}
  let r=residents.find(x=>Number(x.id)===Number(id));
  if(!r){alert('No se encontró el residente.');return;}
  let name=prompt('Nombre del residente:',r.name);
@@ -418,7 +526,7 @@ function editResident(id){
  r.name=name;r.phone=phone;r.obs=obs.trim();
  localStorage.setItem(keyR,JSON.stringify(residents));
  mails.forEach(m=>{if(Number(m.residentId)===Number(r.id)){m.residentName=r.name;m.residentPhone=r.phone;}});
- localStorage.setItem(keyM,JSON.stringify(mails));
+ persistMails(mails);
  renderResidents();
  alert('Residente actualizado.');
 }
@@ -504,6 +612,7 @@ function getPhotoData(){
  });
 }
 async function saveMail(){
+ if(!photoStorageReady){alert('El almacenamiento de fotos aún no está listo o presentó un error. No se guardó ningún paquete. Conserva los datos y el ZIP de respaldo. '+photoStorageError);return;}
  const button=document.querySelector('button[onclick="saveMail()"]');
  if(button){button.disabled=true;button.dataset.oldText=button.textContent;button.textContent='Guardando…';}
  try{
@@ -511,15 +620,11 @@ async function saveMail(){
   let r=selectedMailRecipient();
   if(list.length && !r) r=list[0];
   let photo=await getPhotoData();
-  let m={id:Date.now(),tower:Number(mt.value),apt:String(ma.value),type:mk.value,note:mo.value.trim(),date:new Date().toISOString(),status:'Pendiente',residentId:r?r.id:null,residentName:r?r.name:'',residentPhone:r?r.phone:'',photo:photo,receivedBy:currentUser().name,receivedAt:new Date().toISOString()};
-  const previousRaw=localStorage.getItem(keyM)||'[]';
-  const previousMails=JSON.parse(previousRaw);
-  const candidate=[m,...previousMails];
-  const serialized=JSON.stringify(candidate);
-  localStorage.setItem(keyM,serialized);
-  const verify=JSON.parse(localStorage.getItem(keyM)||'[]');
-  if(!Array.isArray(verify)||!verify.some(x=>String(x.id)===String(m.id)))throw new Error('No se pudo verificar el registro guardado.');
-  mails=verify;
+  let newId=Date.now();while(mails.some(x=>String(x.id)===String(newId)))newId++;let m={id:newId,tower:Number(mt.value),apt:String(ma.value),type:mk.value,note:mo.value.trim(),date:new Date().toISOString(),status:'Pendiente',residentId:r?r.id:null,residentName:r?r.name:'',residentPhone:r?r.phone:'',photo:photo,receivedBy:currentUser().name,receivedAt:new Date().toISOString()};
+  if(photo) { const expectedHash=await sha256Image(photo); await photoDBPut(m.id,photo); const photoCheck=await photoDBGet(m.id); if(!photoCheck||photoCheck!==photo||await sha256Image(photoCheck)!==expectedHash)throw new Error('No se pudo verificar íntegramente la foto nueva mediante SHA-256.'); await photoDBSetHash(m.id,expectedHash); }
+  const candidate=[m,...mails];
+  persistMails(candidate);
+  mails=candidate;
   mo.value='';packagePhoto.value='';photoPreview.textContent='Puedes tomar una foto directamente con la cámara del celular o seleccionar una imagen.';
   renderPending();renderHistory();showMailResident();
   alert(r?'Paquete registrado y verificado para '+r.name+'.':'Paquete registrado y verificado. No hay residente asociado todavía.');
@@ -563,14 +668,18 @@ function callMailResident(id){
  if(!r){alert('Este paquete no tiene un residente asociado.');return;}
  callPhone(r.phone);
 }
-function viewPhoto(id){
- let m=mails.find(x=>x.id===id);
- if(!m || !m.photo){alert('Este paquete no tiene foto.');return}
+async function viewPhoto(id){
+ let m=mails.find(x=>String(x.id)===String(id));
+ if(!m){alert('No se encontró el paquete.');return}
+ let photo=m.photo||'';if(!photo){try{photo=await photoDBGet(m.id);}catch(e){alert('No se pudo leer la foto guardada. Conserva el respaldo.');return}}
+ if(!photo){alert('Este paquete no tiene foto.');return}
+ try{const hash=await sha256Image(photo),meta=await photoDBGetMeta('photo:'+String(m.id));if(meta&&meta.sha256&&meta.sha256!==hash){alert('La verificación SHA-256 de esta foto falló. No se abrirá una imagen posiblemente dañada. Conserva el respaldo.');return;}}catch(e){alert('No se pudo verificar la foto antes de abrirla. Conserva el respaldo. Detalle: '+(e.message||e));return;}
  let w=window.open('','_blank');
- if(w) w.document.write('<title>Foto del paquete</title><body style="margin:0;background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh"><img src="'+m.photo+'" style="max-width:100%;max-height:100vh"></body>');
+ if(w) w.document.write('<title>Foto del paquete</title><body style="margin:0;background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh"><img src="'+photo+'" style="max-width:100%;max-height:100vh"></body>');
 }
 function waResident(id){const r=residents.find(x=>Number(x.id)===Number(id));if(!r){alert('No se encontró el residente.');return;}const phone=normalizeWhatsApp(r.phone);if(!/^573\d{9}$/.test(phone)){alert('El número no parece ser un celular colombiano válido. Verifica el número del residente.');return;}window.open('https://wa.me/'+phone,'_blank')}
 function wa(id){
+ if(!photoStorageReady){alert('El almacenamiento aún no está listo. No se modificó el registro. '+photoStorageError);return;}
  let m=mails.find(x=>Number(x.id)===Number(id));
  if(!m){alert('No se encontró el paquete.');return;}
  if(m.whatsappNotifiedAt){alert('Este paquete ya está marcado como notificado el '+new Date(m.whatsappNotifiedAt).toLocaleString('es-CO')+'.');return;}
@@ -584,12 +693,12 @@ function wa(id){
  const url='https://wa.me/'+phone+'?text='+encodeURIComponent(text);
  // Marca el intento antes de salir de la app para evitar dobles pulsaciones. WhatsApp no confirma el envío real.
  m.whatsappNotifiedAt=new Date().toISOString();m.whatsappNotifiedTo=r.name||'';
- try{localStorage.setItem(keyM,JSON.stringify(mails));}catch(e){delete m.whatsappNotifiedAt;delete m.whatsappNotifiedTo;alert('No se pudo guardar el estado de notificación. Revisa el almacenamiento del navegador.');return;}
+ try{persistMails(mails);}catch(e){delete m.whatsappNotifiedAt;delete m.whatsappNotifiedTo;alert('No se pudo guardar el estado de notificación. Revisa el almacenamiento del navegador.');return;}
  renderPending();renderHistory();
  const opened=window.open(url,'_blank');
  if(!opened){window.location.href=url;}
 }
-function deliver(id){let idx=mails.findIndex(x=>x.id===id);if(idx<0)return;let m=mails[idx],r=getMailResident(m);if(!r){alert('No hay un residente asociado a esta correspondencia.');return;}if(!confirm('¿Marcar esta correspondencia como entregada?'))return;const before=JSON.stringify(mails);m.status='Entregado';m.deliveredAt=new Date().toISOString();m.deliveredBy=currentUser().name;delete m.receivedByResident;try{localStorage.setItem(keyM,JSON.stringify(mails));const verify=JSON.parse(localStorage.getItem(keyM)||'[]');if(!verify.some(x=>String(x.id)===String(id)&&x.status==='Entregado'))throw new Error('No se pudo verificar el cambio.');mails=verify;renderPending();renderHistory();alert('Entrega registrada y verificada.');}catch(e){try{mails=JSON.parse(before);}catch(_){}alert('No se pudo guardar el cambio de entrega. Los datos guardados anteriormente se conservan; revisa el almacenamiento y conserva el respaldo.');}}
+function deliver(id){if(!photoStorageReady){alert('El almacenamiento aún no está listo. No se modificó la entrega. '+photoStorageError);return;}let idx=mails.findIndex(x=>x.id===id);if(idx<0)return;let m=mails[idx],r=getMailResident(m);if(!r){alert('No hay un residente asociado a esta correspondencia.');return;}if(!confirm('¿Marcar esta correspondencia como entregada?'))return;const before=JSON.stringify(mails);m.status='Entregado';m.deliveredAt=new Date().toISOString();m.deliveredBy=currentUser().name;delete m.receivedByResident;try{persistMails(mails);const verify=JSON.parse(localStorage.getItem(keyM)||'[]');if(!verify.some(x=>String(x.id)===String(id)&&x.status==='Entregado'))throw new Error('No se pudo verificar el cambio.');mails=verify.map(x=>{const old=mails.find(y=>String(y.id)===String(x.id));return old&&old.photo?{...x,photo:old.photo}:x;});renderPending();renderHistory();alert('Entrega registrada y verificada.');}catch(e){try{mails=JSON.parse(before);}catch(_){}alert('No se pudo guardar el cambio de entrega. Los datos guardados anteriormente se conservan; revisa el almacenamiento y conserva el respaldo.');}}
 function renderPending(){
  updateStats();
  let p=mails.filter(m=>m.status==='Pendiente');
@@ -668,7 +777,7 @@ window.addEventListener('popstate',function(event){
 });
 // Marca la pantalla inicial sin crear un paso extra en el historial.
 history.replaceState({appView:'home',appRoot:true},'',location.pathname+location.search);
-setup();updateStats();showMailResident();updateRetentionSummary();checkRetentionOnOpen();
+setup();updateStats();showMailResident();updateRetentionSummary();checkRetentionOnOpen();initializePhotoStorage();
 </script>
 <script>if("serviceWorker" in navigator){navigator.serviceWorker.register("./sw.js",{updateViaCache:"none"}).then(r=>r.update()).catch(()=>{});}
 
